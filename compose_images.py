@@ -197,10 +197,15 @@ def main():
     # Load configuration
     config = load_config()
     
-    # Create output directories (separate for images and json)
+    # Get height settings first (needed for directory name)
+    min_height = config["min_object_height"]
+    max_height = config["max_object_height"]
+    
+    # Create output directories: outputs/{min}-{max}/images and outputs/{min}-{max}/json
     output_dir = config["output_dir"]
-    output_images_dir = os.path.join(output_dir, "images")
-    output_json_dir = os.path.join(output_dir, "json")
+    height_range_dir = os.path.join(output_dir, f"{min_height}-{max_height}")
+    output_images_dir = os.path.join(height_range_dir, "images")
+    output_json_dir = os.path.join(height_range_dir, "json")
     os.makedirs(output_images_dir, exist_ok=True)
     os.makedirs(output_json_dir, exist_ok=True)
     
@@ -226,8 +231,6 @@ def main():
     print(f"Found {len(object_files)} object images")
     
     duplicate_count = config["background_duplicate_count"]
-    min_height = config["min_object_height"]
-    max_height = config["max_object_height"]
     target_width = config["output_width"]
     target_height = config["output_height"]
     label = config["object_label"]
@@ -318,8 +321,9 @@ def main():
     
     print(f"\n{'='*50}")
     print(f"Total images generated: {total_generated}")
-    print(f"Output images: {output_images_dir}")
-    print(f"Output json: {output_json_dir}")
+    print(f"Output directory: {height_range_dir}")
+    print(f"  Images: {output_images_dir}")
+    print(f"  JSON: {output_json_dir}")
 
 
 if __name__ == "__main__":

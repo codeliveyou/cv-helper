@@ -1,0 +1,41 @@
+# Configuration file for image compositing script
+
+# Input directories
+background_dir: "data/backgrounds"  # Directory containing background images (.jpg, .png)
+object_dir: "data/objects"          # Directory containing object images (.png)
+
+# Output directory
+output_dir: "outputs"
+
+# Output filename settings
+output_prefix: "gen"              # Prefix for output files (e.g., "gen" -> gen-00123456.jpg)
+output_format: "jpg"              # Output image format: "jpg" or "png"
+output_jpg_quality: 95            # JPG quality (1-100, only used if output_format is "jpg")
+
+# Number of output images to generate per background
+background_duplicate_count: 1
+
+# Object size constraints (height in pixels)
+min_object_height: 50
+max_object_height: 60
+
+# Object label for labelme annotation
+object_label: "bird"
+
+# Output image resolution
+output_width: 1280
+output_height: 720
+
+# Object placement constraints
+# Object center x: 320 <= x <= 960
+# Object center y: y <= 360
+object_x_min: 320
+object_x_max: 960
+object_y_max: 360
+
+# ============================================
+# Object Cropping Settings (for crop_objects.py)
+# ============================================
+cropped_object_dir: "data/objects_cropped"  # Output directory for cropped objects
+crop_padding: 0                              # Padding around cropped content (pixels)
+crop_overwrite: false                        # If true, overwrite original files instead of saving to cropped_object_dir

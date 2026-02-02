@@ -1,0 +1,28 @@
+{
+  "version": "5.5.0",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "bird",
+      "points": [
+        [
+          114.76470588235294,
+          57.254901960784316
+        ],
+        [
+          275.79411764705884,
+          142.30392156862746
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "image.png",
+  "imageData": "Here is BASE64 string.",
+  "imageHeight": 720,
+  "imageWidth": 1280
+}

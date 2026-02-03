@@ -75,14 +75,15 @@ def calculate_valid_position(obj_width: int, obj_height: int, config: dict) -> t
     """
     Calculate a valid (x, y) position for the object center.
     Constraints:
-    - 320 <= center_x <= 960
-    - center_y <= 360
+    - object_x_min <= center_x <= object_x_max
+    - object_y_min <= center_y <= object_y_max
     - Object must fit within the image bounds (1280x720)
     """
     output_width = config["output_width"]
     output_height = config["output_height"]
     x_min = config["object_x_min"]
     x_max = config["object_x_max"]
+    y_min = config.get("object_y_min", 0)
     y_max = config["object_y_max"]
     
     # Calculate valid range for center position
@@ -95,13 +96,13 @@ def calculate_valid_position(obj_width: int, obj_height: int, config: dict) -> t
     valid_x_max = min(x_max, output_width - half_width)
     
     # Adjust y range to ensure object fits
-    valid_y_min = half_height  # Object top edge at y=0
+    valid_y_min = max(y_min, half_height)
     valid_y_max = min(y_max, output_height - half_height)
     
     if valid_x_min > valid_x_max or valid_y_min > valid_y_max:
         # Fallback: place at center of valid area
         center_x = (x_min + x_max) // 2
-        center_y = y_max // 2
+        center_y = (y_min + y_max) // 2
         return center_x, center_y
     
     center_x = random.randint(valid_x_min, valid_x_max)

@@ -156,6 +156,7 @@ class ManualComposeApp(tk.Tk):
         self.save_prefix = tk.StringVar(value="")
         self.save_format = tk.StringVar(value="jpg")  # jpg or png
         self.random_obj_on_next_bg = tk.BooleanVar(value=False)
+        self.random_rotate_object = tk.BooleanVar(value=False)
         self.labelme_label = tk.StringVar(value="")
         self.auto_output_by_object_size = tk.BooleanVar(value=False)
 
@@ -337,6 +338,7 @@ class ManualComposeApp(tk.Tk):
         self.auto_output_by_object_size.set(
             bool(data.get("auto_output_by_object_size", False))
         )
+        self.random_rotate_object.set(bool(data.get("random_rotate_object", False)))
         self._refresh_output_listbox_with_counts()
         sel = int(data.get("selected_output_index", 0))
         if self._output_folder_paths:
@@ -356,6 +358,7 @@ class ManualComposeApp(tk.Tk):
             "output_folders": self._output_folder_paths,
             "selected_output_index": idx,
             "auto_output_by_object_size": self.auto_output_by_object_size.get(),
+            "random_rotate_object": self.random_rotate_object.get(),
         }
         try:
             with open(_state_file_path(), "w", encoding="utf-8") as f:
@@ -584,6 +587,12 @@ class ManualComposeApp(tk.Tk):
             text="Pick random object when moving to next background",
             variable=self.random_obj_on_next_bg,
         ).pack(side=tk.LEFT, padx=(16, 0))
+        ttk.Checkbutton(
+            row5,
+            text="Random rotation on place",
+            variable=self.random_rotate_object,
+            command=self._save_output_folders_state,
+        ).pack(side=tk.LEFT, padx=(12, 0))
 
         self.status = tk.StringVar(value="Load folders, then click on the image to place object.")
         ttk.Label(frm, textvariable=self.status, wraplength=880).pack(fill=tk.X, **pad)
@@ -831,6 +840,18 @@ class ManualComposeApp(tk.Tk):
             messagebox.showerror("Error", f"Could not load object:\n{e}")
             return
 
+        rotation_note = ""
+        if self.random_rotate_object.get():
+            angle_deg = random.uniform(0.0, 360.0)
+            obj_r = obj_r.convert("RGBA")
+            obj_r = obj_r.rotate(
+                angle_deg,
+                resample=Image.Resampling.BICUBIC,
+                expand=True,
+                fillcolor=(0, 0, 0, 0),
+            )
+            rotation_note = f", rot {angle_deg:.1f}°"
+
         iw, ih = self.bg_work.size
         ow, oh = obj_r.size
         cx, cy = self.clamp_center(coords[0], coords[1], ow, oh, iw, ih)
@@ -885,7 +906,7 @@ class ManualComposeApp(tk.Tk):
 
         self.status.set(
             f"Saved: {fpath} + {os.path.basename(json_path)} "
-            f"(height {target_h}px, center {cx},{cy}) — canvas shows result"
+            f"(height {target_h}px, center {cx},{cy}{rotation_note}) — canvas shows result"
         )
 
     def undo_last_placement(self) -> None:

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -42,6 +43,104 @@ def list_objects(folder: str) -> list[str]:
     )
 
 
+def _folder_basename(path: str) -> str:
+    p = (path or "").strip().rstrip("/\\")
+    return os.path.basename(p) if p else ""
+
+
+def _safe_prefix_token(s: str) -> str:
+    """Safe fragment for filenames / save prefix."""
+    if not s:
+        return "item"
+    t = re.sub(r"[^\w\-.]+", "_", s, flags=re.UNICODE)
+    t = t.strip("._")
+    return t or "item"
+
+
+def _label_from_object_folder_path(path: str) -> str:
+    """Default Labelme label = object folder name (minimal escaping for JSON)."""
+    name = _folder_basename(path)
+    name = name.replace('"', "").replace("\n", "").replace("\r", "")
+    return name.strip() or "object"
+
+
+STATE_FILENAME = ".manual_compose_state.json"
+
+
+def _state_file_path() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), STATE_FILENAME)
+
+
+def _normalize_folder_size_basename(name: str) -> str:
+    """Normalize unicode dashes to ASCII hyphen for parsing."""
+    s = (name or "").strip()
+    for ch in ("\u2212", "\u2013", "\u2014", "\u2010"):  # minus, en, em, hyphen
+        s = s.replace(ch, "-")
+    return s
+
+
+def _parse_object_height_rule_from_folder_basename(name: str):
+    """
+    Map output folder *basename* to a height predicate.
+
+    Folder name means **min_height-max_height** (inclusive on both ends when both given):
+
+    - ``-30`` or ``0-30``  → only max: ``0 <= height <= 30``
+    - ``30-50`` → ``30 <= height <= 50``
+    - ``300-`` → only min: ``height >= 300``
+
+    Parsing uses a **single split on the first hyphen** so ``-30`` is not mistaken for
+    ``30`` + suffix patterns, and ``300-`` is not confused with a two-number range.
+
+    Returns a callable ``height -> bool`` or None if the name does not match any rule.
+    """
+    raw = _normalize_folder_size_basename(name)
+    if "-" not in raw:
+        return None
+    left, right = raw.split("-", 1)
+    left = left.strip()
+    right = right.strip()
+
+    # "-30" / "0-30" style: implicit min 0, max = right
+    if left == "" and right.isdigit():
+        hi = int(right)
+        return lambda h, hi=hi: 0 <= h <= hi
+
+    # "300-" style: min = left, no max
+    if right == "" and left.isdigit():
+        lo = int(left)
+        return lambda h, lo=lo: h >= lo
+
+    # "30-50" style: both bounds
+    if left.isdigit() and right.isdigit():
+        lo, hi = int(left), int(right)
+        if lo > hi:
+            lo, hi = hi, lo
+        return lambda h, lo=lo, hi=hi: lo <= h <= hi
+
+    return None
+
+
+def count_labeled_results_in_folder(folder: str) -> int:
+    """Count image files that have a same-stem .json (one composite result)."""
+    if not folder or not os.path.isdir(folder):
+        return 0
+    img_exts = {".jpg", ".jpeg", ".png"}
+    n = 0
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return 0
+    for f in names:
+        base, ext = os.path.splitext(f)
+        if ext.lower() not in img_exts:
+            continue
+        json_path = os.path.join(folder, base + ".json")
+        if os.path.isfile(json_path):
+            n += 1
+    return n
+
+
 class ManualComposeApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -51,14 +150,14 @@ class ManualComposeApp(tk.Tk):
         self.bg_folder = tk.StringVar()
         self.obj_folder = tk.StringVar()
         self.out_folder = tk.StringVar()
-        self.min_height = tk.IntVar(value=50)
-        self.max_height = tk.IntVar(value=200)
+        self.object_height = tk.IntVar(value=100)
         self.output_w = tk.IntVar(value=1280)
         self.output_h = tk.IntVar(value=720)
-        self.save_prefix = tk.StringVar(value="manual")
+        self.save_prefix = tk.StringVar(value="")
         self.save_format = tk.StringVar(value="jpg")  # jpg or png
         self.random_obj_on_next_bg = tk.BooleanVar(value=False)
-        self.labelme_label = tk.StringVar(value="bird")
+        self.labelme_label = tk.StringVar(value="")
+        self.auto_output_by_object_size = tk.BooleanVar(value=False)
 
         self.bg_paths: list[str] = []
         self.obj_paths: list[str] = []
@@ -77,12 +176,209 @@ class ManualComposeApp(tk.Tk):
         # Each entry: (background RGB before placement, image path, json path)
         self._undo_stack: list[tuple[Image.Image, str, str]] = []
 
+        self._output_folder_paths: list[str] = []
+
         self._build_ui()
+        self._load_output_folders_state()
+        self.object_height.trace_add("write", self._schedule_output_listbox_refresh_counts)
+
         self.bind("<Right>", lambda e: self.next_background())
         self.bind("<Down>", lambda e: self.next_object())
-        self.bind("<Left>", lambda e: self.undo_last_placement())
-        self.bind("<Shift-Left>", lambda e: self.prev_background())
+        self.bind("<Left>", lambda e: self.prev_background())
         self.bind("<Up>", lambda e: self.prev_object())
+        self.bind_all("<BackSpace>", self._on_backspace_undo)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Defaults: label = object folder name; prefix = background folder + "_" + label
+        self.bg_folder.trace_add("write", self._schedule_folder_derived_defaults)
+        self.obj_folder.trace_add("write", self._schedule_folder_derived_defaults)
+        self.labelme_label.trace_add("write", self._schedule_save_prefix_from_bg_and_label)
+
+    def _schedule_output_listbox_refresh_counts(self, *_args) -> None:
+        self.after_idle(self._refresh_output_listbox_with_counts)
+
+    def _on_auto_output_toggle(self) -> None:
+        self._refresh_output_listbox_with_counts()
+        self._save_output_folders_state()
+
+    def _schedule_folder_derived_defaults(self, *_args) -> None:
+        self.after_idle(self._apply_folder_derived_defaults)
+
+    def _schedule_save_prefix_from_bg_and_label(self, *_args) -> None:
+        self.after_idle(self._sync_save_prefix_from_background_and_label)
+
+    def _apply_folder_derived_defaults(self) -> None:
+        obj = self.obj_folder.get().strip()
+        if obj and os.path.isdir(obj):
+            self.labelme_label.set(_label_from_object_folder_path(obj))
+        self._sync_save_prefix_from_background_and_label()
+
+    def _sync_save_prefix_from_background_and_label(self) -> None:
+        bg = self.bg_folder.get().strip()
+        if not bg or not os.path.isdir(bg):
+            return
+        lbl = self.labelme_label.get().strip() or "object"
+        self.save_prefix.set(
+            f"{_safe_prefix_token(_folder_basename(bg))}_{_safe_prefix_token(lbl)}"
+        )
+
+    def _on_backspace_undo(self, event: tk.Event) -> str | None:
+        """Undo last placement; ignore Backspace when typing in text fields."""
+        try:
+            w = self.focus_get()
+        except tk.TclError:
+            w = None
+        if w is not None:
+            cls = w.winfo_class()
+            if cls in ("Entry", "TEntry", "Text", "TSpinbox", "Spinbox"):
+                return None
+        self.undo_last_placement()
+        return "break"
+
+    def _load_output_folders_state(self) -> None:
+        path = _state_file_path()
+        if not os.path.isfile(path):
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+        folders = data.get("output_folders") or data.get("folders") or []
+        if not isinstance(folders, list):
+            return
+        self._output_folder_paths = [str(p) for p in folders if p and isinstance(p, str)]
+        self.auto_output_by_object_size.set(
+            bool(data.get("auto_output_by_object_size", False))
+        )
+        self._refresh_output_listbox_with_counts()
+        sel = int(data.get("selected_output_index", 0))
+        if self._output_folder_paths:
+            sel = max(0, min(sel, len(self._output_folder_paths) - 1))
+            self.out_listbox.selection_clear(0, tk.END)
+            self.out_listbox.selection_set(sel)
+            self.out_listbox.see(sel)
+            self.out_folder.set(self._output_folder_paths[sel])
+
+    def _save_output_folders_state(self) -> None:
+        try:
+            sel = self.out_listbox.curselection()
+            idx = int(sel[0]) if sel else 0
+        except (tk.TclError, IndexError, ValueError):
+            idx = 0
+        data = {
+            "output_folders": self._output_folder_paths,
+            "selected_output_index": idx,
+            "auto_output_by_object_size": self.auto_output_by_object_size.get(),
+        }
+        try:
+            with open(_state_file_path(), "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except OSError:
+            pass
+
+    def _refresh_output_listbox_with_counts(self) -> None:
+        """Fill listbox with ``[count] path`` and optional auto-target marker."""
+        prev_sel = ()
+        try:
+            prev_sel = self.out_listbox.curselection()
+        except tk.TclError:
+            pass
+        prev_idx = int(prev_sel[0]) if prev_sel else None
+
+        self.out_listbox.delete(0, tk.END)
+        try:
+            h = int(self.object_height.get())
+        except (tk.TclError, ValueError):
+            h = 0
+        auto_target: str | None = None
+        if self.auto_output_by_object_size.get():
+            auto_target = self._resolve_output_folder_for_height(h)
+
+        for p in self._output_folder_paths:
+            cnt = count_labeled_results_in_folder(p)
+            base = _folder_basename(p)
+            rule = _parse_object_height_rule_from_folder_basename(base)
+            star = "  ★" if auto_target and os.path.normpath(p) == os.path.normpath(auto_target) else ""
+            miss = "  (no rule)" if self.auto_output_by_object_size.get() and rule is None else ""
+            line = f"[{cnt:>4}]  {p}{star}{miss}"
+            self.out_listbox.insert(tk.END, line)
+
+        if prev_idx is not None and self._output_folder_paths:
+            prev_idx = max(0, min(prev_idx, len(self._output_folder_paths) - 1))
+            self.out_listbox.selection_clear(0, tk.END)
+            self.out_listbox.selection_set(prev_idx)
+            self.out_listbox.see(prev_idx)
+
+    def _listbox_index_to_folder_path(self, index: int) -> str | None:
+        if 0 <= index < len(self._output_folder_paths):
+            return self._output_folder_paths[index]
+        return None
+
+    def _resolve_output_folder_for_height(self, height: int) -> str | None:
+        """First list folder whose basename matches the height rule."""
+        for p in self._output_folder_paths:
+            base = _folder_basename(p)
+            rule = _parse_object_height_rule_from_folder_basename(base)
+            if rule is not None and rule(height):
+                return p
+        return None
+
+    def _select_listbox_index_for_path(self, folder_path: str) -> None:
+        norm = os.path.normpath(folder_path)
+        for i, p in enumerate(self._output_folder_paths):
+            if os.path.normpath(p) == norm:
+                self.out_listbox.selection_clear(0, tk.END)
+                self.out_listbox.selection_set(i)
+                self.out_listbox.see(i)
+                self.out_folder.set(p)
+                return
+
+    def _on_output_listbox_select(self, _event: tk.Event | None = None) -> None:
+        sel = self.out_listbox.curselection()
+        if not sel:
+            return
+        i = int(sel[0])
+        p = self._listbox_index_to_folder_path(i)
+        if p is not None:
+            self.out_folder.set(p)
+            self._save_output_folders_state()
+
+    def add_output_folder(self) -> None:
+        d = filedialog.askdirectory(title="Add output folder to list")
+        if not d:
+            return
+        d = os.path.normpath(d)
+        if d not in self._output_folder_paths:
+            self._output_folder_paths.append(d)
+            self._refresh_output_listbox_with_counts()
+        idx = self._output_folder_paths.index(d)
+        self.out_listbox.selection_clear(0, tk.END)
+        self.out_listbox.selection_set(idx)
+        self.out_listbox.see(idx)
+        self.out_folder.set(d)
+        self._save_output_folders_state()
+
+    def remove_output_folder(self) -> None:
+        sel = self.out_listbox.curselection()
+        if not sel:
+            messagebox.showinfo("Output folders", "Select a folder in the list to remove.")
+            return
+        i = int(sel[0])
+        if 0 <= i < len(self._output_folder_paths):
+            self._output_folder_paths.pop(i)
+        self._refresh_output_listbox_with_counts()
+        if self._output_folder_paths:
+            new_i = min(i, len(self._output_folder_paths) - 1)
+            self.out_listbox.selection_set(new_i)
+            self.out_folder.set(self._output_folder_paths[new_i])
+        else:
+            self.out_folder.set("")
+        self._save_output_folders_state()
+
+    def _on_close(self) -> None:
+        self._save_output_folders_state()
+        self.destroy()
 
     def _build_ui(self) -> None:
         pad = {"padx": 6, "pady": 4}
@@ -111,22 +407,54 @@ class ManualComposeApp(tk.Tk):
 
         row2 = ttk.Frame(frm)
         row2.pack(fill=tk.X, **pad)
-        ttk.Button(row2, text="Output folder…", command=self.pick_out_folder).pack(
+        ttk.Label(row2, text="Output folders (select one):").pack(side=tk.LEFT, **pad)
+        out_list_frame = ttk.Frame(row2)
+        out_list_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, **pad)
+        scroll = ttk.Scrollbar(out_list_frame)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.out_listbox = tk.Listbox(
+            out_list_frame,
+            height=4,
+            selectmode=tk.SINGLE,
+            yscrollcommand=scroll.set,
+            exportselection=False,
+        )
+        self.out_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.config(command=self.out_listbox.yview)
+        self.out_listbox.bind("<<ListboxSelect>>", self._on_output_listbox_select)
+
+        row2b = ttk.Frame(frm)
+        row2b.pack(fill=tk.X, **pad)
+        ttk.Button(row2b, text="Add output folder…", command=self.add_output_folder).pack(
             side=tk.LEFT, **pad
         )
-        ttk.Entry(row2, textvariable=self.out_folder, width=50).pack(
+        ttk.Button(row2b, text="Remove selected", command=self.remove_output_folder).pack(
+            side=tk.LEFT, **pad
+        )
+        ttk.Button(row2b, text="Refresh counts", command=self._refresh_output_listbox_with_counts).pack(
+            side=tk.LEFT, **pad
+        )
+        ttk.Checkbutton(
+            row2b,
+            text="Auto folder by object height",
+            variable=self.auto_output_by_object_size,
+            command=self._on_auto_output_toggle,
+        ).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Label(
+            row2b,
+            text="(basename: min-max — -30 ⇒ 0–30, 30-50 ⇒ 30–50, 300- ⇒ ≥300)",
+            font=("TkDefaultFont", 8),
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Label(row2b, text="Active path:").pack(side=tk.LEFT, padx=(16, 4))
+        ttk.Entry(row2b, textvariable=self.out_folder, width=55).pack(
             side=tk.LEFT, fill=tk.X, expand=True, **pad
         )
 
         # Row: height + output size
         row3 = ttk.Frame(frm)
         row3.pack(fill=tk.X, **pad)
-        ttk.Label(row3, text="Object height min:").pack(side=tk.LEFT, **pad)
-        ttk.Spinbox(row3, from_=1, to=2000, textvariable=self.min_height, width=8).pack(
-            side=tk.LEFT, **pad
-        )
-        ttk.Label(row3, text="max:").pack(side=tk.LEFT)
-        ttk.Spinbox(row3, from_=1, to=2000, textvariable=self.max_height, width=8).pack(
+        ttk.Label(row3, text="Object height (px):").pack(side=tk.LEFT, **pad)
+        ttk.Spinbox(row3, from_=1, to=2000, textvariable=self.object_height, width=8).pack(
             side=tk.LEFT, **pad
         )
         ttk.Label(row3, text="Output W×H:").pack(side=tk.LEFT, padx=(16, 4))
@@ -161,7 +489,7 @@ class ManualComposeApp(tk.Tk):
         ttk.Button(row5, text="↓ Next object", command=self.next_object).pack(
             side=tk.LEFT, **pad
         )
-        ttk.Button(row5, text="← Undo last", command=self.undo_last_placement).pack(
+        ttk.Button(row5, text="Undo last (Backspace)", command=self.undo_last_placement).pack(
             side=tk.LEFT, **pad
         )
         ttk.Checkbutton(
@@ -201,8 +529,8 @@ class ManualComposeApp(tk.Tk):
 
         ttk.Label(
             frm,
-            text="Shortcuts: Right = next background · Down = next object · Left = undo last save · "
-            "Shift+Left = previous background · Up = previous object",
+            text="Shortcuts: Right = next background · Left = previous background · Down = next object · "
+            "Up = previous object · Backspace = undo last save (not in text fields)",
             font=("TkDefaultFont", 8),
         ).pack(anchor=tk.W)
 
@@ -217,11 +545,6 @@ class ManualComposeApp(tk.Tk):
         if d:
             self.obj_folder.set(d)
             self.refresh_objects()
-
-    def pick_out_folder(self) -> None:
-        d = filedialog.askdirectory(title="Select output folder")
-        if d:
-            self.out_folder.set(d)
 
     def refresh_backgrounds(self) -> None:
         self.bg_paths = list_backgrounds(self.bg_folder.get())
@@ -295,6 +618,7 @@ class ManualComposeApp(tk.Tk):
             return
         self.bg_index = (self.bg_index - 1) % len(self.bg_paths)
         self.load_current_background()
+        self.update_object_preview()
 
     def next_object(self) -> None:
         if not self.obj_paths:
@@ -374,10 +698,32 @@ class ManualComposeApp(tk.Tk):
         return cx, cy
 
     def on_canvas_click(self, event: tk.Event) -> None:
-        out_dir = self.out_folder.get().strip()
-        if not out_dir:
-            messagebox.showwarning("Output", "Please set output folder.")
-            return
+        target_h = int(self.object_height.get())
+        target_h = max(1, min(2000, target_h))
+
+        if self.auto_output_by_object_size.get():
+            if not self._output_folder_paths:
+                messagebox.showwarning(
+                    "Output",
+                    "Add output folders whose names encode size (e.g. -30, 30-50, 300-).",
+                )
+                return
+            resolved = self._resolve_output_folder_for_height(target_h)
+            if resolved is None:
+                messagebox.showwarning(
+                    "Auto output",
+                    f"No folder in the list matches object height {target_h}px.\n"
+                    "Folder basename rules: -N or 0-N (0 ≤ h ≤ N), A-B (inclusive), N- (h ≥ N).",
+                )
+                return
+            out_dir = resolved
+            self._select_listbox_index_for_path(out_dir)
+        else:
+            out_dir = self.out_folder.get().strip()
+            if not out_dir:
+                messagebox.showwarning("Output", "Please set output folder or enable auto folder by height.")
+                return
+
         if self.bg_work is None:
             messagebox.showwarning("Background", "No background loaded.")
             return
@@ -389,12 +735,6 @@ class ManualComposeApp(tk.Tk):
         if coords is None:
             self.status.set("Click inside the image area.")
             return
-
-        min_h = int(self.min_height.get())
-        max_h = int(self.max_height.get())
-        if min_h > max_h:
-            min_h, max_h = max_h, min_h
-        target_h = random.randint(min_h, max_h)
 
         obj_path = self.obj_paths[self.obj_index % len(self.obj_paths)]
         try:
@@ -453,6 +793,8 @@ class ManualComposeApp(tk.Tk):
         # Show composite as the new working background (stack further placements on top)
         self.bg_work = result
         self.redraw_canvas()
+        self._refresh_output_listbox_with_counts()
+        self._save_output_folders_state()
 
         self.status.set(
             f"Saved: {fpath} + {os.path.basename(json_path)} "
@@ -484,6 +826,7 @@ class ManualComposeApp(tk.Tk):
             self.status.set(
                 f"Undone — removed {os.path.basename(fpath)} and {os.path.basename(jpath)}"
             )
+        self._refresh_output_listbox_with_counts()
 
     def run(self) -> None:
         self.mainloop()

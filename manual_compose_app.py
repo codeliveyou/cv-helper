@@ -581,7 +581,12 @@ class ManualComposeApp(tk.Tk):
         main_row.columnconfigure(0, weight=1)
         main_row.rowconfigure(0, weight=1)
 
-        self.canvas = tk.Canvas(main_row, bg="#222", highlightthickness=0)
+        self.canvas = tk.Canvas(
+            main_row,
+            bg="#222",
+            highlightthickness=0,
+            takefocus=True,
+        )
         self.canvas.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
         self.canvas.bind("<Button-1>", self.on_canvas_click)
         self.canvas.bind("<Button-3>", self._on_canvas_right_click_undo)
@@ -687,6 +692,7 @@ class ManualComposeApp(tk.Tk):
             self.obj_index = random.randrange(len(self.obj_paths))
         self.load_current_background()
         self.update_object_preview()
+        self._focus_canvas_for_shortcuts()
 
     def prev_background(self) -> None:
         if not self.bg_paths:
@@ -694,6 +700,7 @@ class ManualComposeApp(tk.Tk):
         self.bg_index = (self.bg_index - 1) % len(self.bg_paths)
         self.load_current_background()
         self.update_object_preview()
+        self._focus_canvas_for_shortcuts()
 
     def next_object(self) -> None:
         if not self.obj_paths:
@@ -702,6 +709,7 @@ class ManualComposeApp(tk.Tk):
         self.obj_index = (self.obj_index + 1) % len(self.obj_paths)
         self.set_status()
         self.update_object_preview()
+        self._focus_canvas_for_shortcuts()
 
     def prev_object(self) -> None:
         if not self.obj_paths:
@@ -709,6 +717,7 @@ class ManualComposeApp(tk.Tk):
         self.obj_index = (self.obj_index - 1) % len(self.obj_paths)
         self.set_status()
         self.update_object_preview()
+        self._focus_canvas_for_shortcuts()
 
     def set_status(self) -> None:
         parts = []
@@ -755,6 +764,13 @@ class ManualComposeApp(tk.Tk):
         self._photo = ImageTk.PhotoImage(disp)
         self.canvas.create_image(self._offset_x, self._offset_y, anchor=tk.NW, image=self._photo)
 
+    def _focus_canvas_for_shortcuts(self) -> None:
+        """Move keyboard focus to the image canvas so Left/Right/Up/Down shortcuts work (not spinbox/entry)."""
+        try:
+            self.canvas.focus_set()
+        except tk.TclError:
+            pass
+
     def canvas_to_image_coords(self, cx: int, cy: int) -> tuple[int, int] | None:
         if self.bg_work is None:
             return None
@@ -774,10 +790,12 @@ class ManualComposeApp(tk.Tk):
 
     def _on_canvas_right_click_undo(self, _event: tk.Event) -> str:
         """Erase last output (same as Undo button) — right mouse button on image area."""
+        self._focus_canvas_for_shortcuts()
         self.undo_last_placement()
         return "break"
 
     def on_canvas_click(self, event: tk.Event) -> None:
+        self._focus_canvas_for_shortcuts()
         target_h = int(self.object_height.get())
         target_h = max(1, min(2000, target_h))
 
@@ -887,6 +905,7 @@ class ManualComposeApp(tk.Tk):
         self.redraw_canvas()
         self._refresh_output_listbox_with_counts()
         self._save_output_folders_state()
+        self._focus_canvas_for_shortcuts()
 
         self.status.set(
             f"Saved: {fpath} + {os.path.basename(json_path)} "
@@ -919,6 +938,7 @@ class ManualComposeApp(tk.Tk):
                 f"Undone — removed {os.path.basename(fpath)} and {os.path.basename(jpath)}"
             )
         self._refresh_output_listbox_with_counts()
+        self._focus_canvas_for_shortcuts()
 
     def run(self) -> None:
         self.mainloop()

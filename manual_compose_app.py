@@ -177,16 +177,17 @@ class ManualComposeApp(tk.Tk):
         self._undo_stack: list[tuple[Image.Image, str, str]] = []
 
         self._output_folder_paths: list[str] = []
+        self._spin_object_height: ttk.Spinbox | None = None
 
         self._build_ui()
         self._load_output_folders_state()
         self.object_height.trace_add("write", self._schedule_output_listbox_refresh_counts)
 
         self.bind("<Right>", lambda e: self.next_background())
-        self.bind("<Down>", lambda e: self.next_object())
         self.bind("<Left>", lambda e: self.prev_background())
-        self.bind("<Up>", lambda e: self.prev_object())
-        self.bind_all("<BackSpace>", self._on_backspace_undo)
+        self.bind_all("<Down>", self._on_all_arrow_down)
+        self.bind_all("<Up>", self._on_all_arrow_up)
+        self.bind_all("<Control-Left>", self._on_ctrl_left_undo)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Defaults: label = object folder name; prefix = background folder + "_" + label
@@ -222,8 +223,8 @@ class ManualComposeApp(tk.Tk):
             f"{_safe_prefix_token(_folder_basename(bg))}_{_safe_prefix_token(lbl)}"
         )
 
-    def _on_backspace_undo(self, event: tk.Event) -> str | None:
-        """Undo last placement; ignore Backspace when typing in text fields."""
+    def _on_ctrl_left_undo(self, _event: tk.Event) -> str | None:
+        """Undo last placement on Ctrl+Left; skip when focus is in text fields (keep word-left etc.)."""
         try:
             w = self.focus_get()
         except tk.TclError:
@@ -233,6 +234,58 @@ class ManualComposeApp(tk.Tk):
             if cls in ("Entry", "TEntry", "Text", "TSpinbox", "Spinbox"):
                 return None
         self.undo_last_placement()
+        return "break"
+
+    def _focus_is_inside_object_height_spinbox(self) -> bool:
+        """ttk.Spinbox often puts keyboard focus on an inner Entry; walk masters."""
+        spin = self._spin_object_height
+        if spin is None:
+            return False
+        try:
+            w = self.focus_get()
+        except tk.TclError:
+            return False
+        while w is not None:
+            if w is spin:
+                return True
+            try:
+                w = w.master
+            except (tk.TclError, AttributeError):
+                break
+        return False
+
+    def _on_all_arrow_down(self, _event: tk.Event) -> str | None:
+        """Next object on Down; never change object-height spinbox value with arrows."""
+        if self._focus_is_inside_object_height_spinbox():
+            self.next_object()
+            return "break"
+        try:
+            w = self.focus_get()
+            cls = w.winfo_class()
+        except tk.TclError:
+            return None
+        if cls in ("Entry", "TEntry", "Text", "Listbox"):
+            return None
+        if cls in ("TSpinbox", "Spinbox"):
+            return None
+        self.next_object()
+        return "break"
+
+    def _on_all_arrow_up(self, _event: tk.Event) -> str | None:
+        """Previous object on Up; never change object-height spinbox value with arrows."""
+        if self._focus_is_inside_object_height_spinbox():
+            self.prev_object()
+            return "break"
+        try:
+            w = self.focus_get()
+            cls = w.winfo_class()
+        except tk.TclError:
+            return None
+        if cls in ("Entry", "TEntry", "Text", "Listbox"):
+            return None
+        if cls in ("TSpinbox", "Spinbox"):
+            return None
+        self.prev_object()
         return "break"
 
     def _load_output_folders_state(self) -> None:
@@ -454,9 +507,10 @@ class ManualComposeApp(tk.Tk):
         row3 = ttk.Frame(frm)
         row3.pack(fill=tk.X, **pad)
         ttk.Label(row3, text="Object height (px):").pack(side=tk.LEFT, **pad)
-        ttk.Spinbox(row3, from_=1, to=2000, textvariable=self.object_height, width=8).pack(
-            side=tk.LEFT, **pad
+        self._spin_object_height = ttk.Spinbox(
+            row3, from_=1, to=2000, textvariable=self.object_height, width=8
         )
+        self._spin_object_height.pack(side=tk.LEFT, **pad)
         ttk.Label(row3, text="Output W×H:").pack(side=tk.LEFT, padx=(16, 4))
         ttk.Spinbox(row3, from_=320, to=4096, textvariable=self.output_w, width=6).pack(
             side=tk.LEFT, **pad
@@ -489,7 +543,7 @@ class ManualComposeApp(tk.Tk):
         ttk.Button(row5, text="↓ Next object", command=self.next_object).pack(
             side=tk.LEFT, **pad
         )
-        ttk.Button(row5, text="Undo last (Backspace)", command=self.undo_last_placement).pack(
+        ttk.Button(row5, text="Undo last (Ctrl+←)", command=self.undo_last_placement).pack(
             side=tk.LEFT, **pad
         )
         ttk.Checkbutton(
@@ -530,7 +584,7 @@ class ManualComposeApp(tk.Tk):
         ttk.Label(
             frm,
             text="Shortcuts: Right = next background · Left = previous background · Down = next object · "
-            "Up = previous object · Backspace = undo last save (not in text fields)",
+            "Up = previous object · Ctrl+Left = undo last save (not in text fields)",
             font=("TkDefaultFont", 8),
         ).pack(anchor=tk.W)
 

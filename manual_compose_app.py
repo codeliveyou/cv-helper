@@ -183,8 +183,8 @@ class ManualComposeApp(tk.Tk):
         self._load_output_folders_state()
         self.object_height.trace_add("write", self._schedule_output_listbox_refresh_counts)
 
-        self.bind("<Right>", lambda e: self.next_background())
-        self.bind("<Left>", lambda e: self.prev_background())
+        self.bind_all("<Left>", self._on_arrow_left_background)
+        self.bind_all("<Right>", self._on_arrow_right_background)
         self.bind_all("<Down>", self._on_all_arrow_down)
         self.bind_all("<Up>", self._on_all_arrow_up)
         self.bind_all("<Control-Left>", self._on_ctrl_left_undo)
@@ -222,6 +222,39 @@ class ManualComposeApp(tk.Tk):
         self.save_prefix.set(
             f"{_safe_prefix_token(_folder_basename(bg))}_{_safe_prefix_token(lbl)}"
         )
+
+    @staticmethod
+    def _event_has_control_modifier(event: tk.Event) -> bool:
+        """True if Control is held (skip plain Left so Ctrl+Left only runs undo)."""
+        s = getattr(event, "state", 0) or 0
+        return bool(s & 0x0004)
+
+    def _focus_allows_background_left_right(self) -> bool:
+        """Do not change background when typing in entries, spinboxes, listbox, etc."""
+        try:
+            w = self.focus_get()
+        except tk.TclError:
+            return True
+        cls = w.winfo_class()
+        if cls in ("Entry", "TEntry", "Text", "TSpinbox", "Spinbox", "Listbox", "TCombobox"):
+            return False
+        return True
+
+    def _on_arrow_left_background(self, event: tk.Event) -> str | None:
+        """Previous background on Left only if not Ctrl+Left (undo) and not in a text field."""
+        if self._event_has_control_modifier(event):
+            return None
+        if not self._focus_allows_background_left_right():
+            return None
+        self.prev_background()
+        return "break"
+
+    def _on_arrow_right_background(self, event: tk.Event) -> str | None:
+        """Next background on Right only if not in a text field."""
+        if not self._focus_allows_background_left_right():
+            return None
+        self.next_background()
+        return "break"
 
     def _on_ctrl_left_undo(self, _event: tk.Event) -> str | None:
         """Undo last placement on Ctrl+Left; skip when focus is in text fields (keep word-left etc.)."""

@@ -188,7 +188,6 @@ class ManualComposeApp(tk.Tk):
         self.bind_all("<Right>", self._on_arrow_right_background)
         self.bind_all("<Down>", self._on_all_arrow_down)
         self.bind_all("<Up>", self._on_all_arrow_up)
-        self.bind_all("<Control-Left>", self._on_ctrl_left_undo)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Defaults: label = object folder name; prefix = background folder + "_" + label
@@ -224,12 +223,6 @@ class ManualComposeApp(tk.Tk):
             f"{_safe_prefix_token(_folder_basename(bg))}_{_safe_prefix_token(lbl)}"
         )
 
-    @staticmethod
-    def _event_has_control_modifier(event: tk.Event) -> bool:
-        """True if Control is held (skip plain Left so Ctrl+Left only runs undo)."""
-        s = getattr(event, "state", 0) or 0
-        return bool(s & 0x0004)
-
     def _focus_allows_background_left_right(self) -> bool:
         """Do not change background when typing in entries, spinboxes, listbox, etc."""
         try:
@@ -242,9 +235,7 @@ class ManualComposeApp(tk.Tk):
         return True
 
     def _on_arrow_left_background(self, event: tk.Event) -> str | None:
-        """Previous background on Left only if not Ctrl+Left (undo) and not in a text field."""
-        if self._event_has_control_modifier(event):
-            return None
+        """Previous background on Left if not in a text field."""
         if not self._focus_allows_background_left_right():
             return None
         self.prev_background()
@@ -255,19 +246,6 @@ class ManualComposeApp(tk.Tk):
         if not self._focus_allows_background_left_right():
             return None
         self.next_background()
-        return "break"
-
-    def _on_ctrl_left_undo(self, _event: tk.Event) -> str | None:
-        """Undo last placement on Ctrl+Left; skip when focus is in text fields (keep word-left etc.)."""
-        try:
-            w = self.focus_get()
-        except tk.TclError:
-            w = None
-        if w is not None:
-            cls = w.winfo_class()
-            if cls in ("Entry", "TEntry", "Text", "TSpinbox", "Spinbox"):
-                return None
-        self.undo_last_placement()
         return "break"
 
     def _focus_is_inside_object_height_spinbox(self) -> bool:
@@ -579,7 +557,7 @@ class ManualComposeApp(tk.Tk):
         ttk.Button(row5, text="↓ Next object", command=self.next_object).pack(
             side=tk.LEFT, **pad
         )
-        ttk.Button(row5, text="Undo last (Ctrl+←)", command=self.undo_last_placement).pack(
+        ttk.Button(row5, text="Undo last (right-click image)", command=self.undo_last_placement).pack(
             side=tk.LEFT, **pad
         )
         ttk.Checkbutton(
@@ -606,6 +584,7 @@ class ManualComposeApp(tk.Tk):
         self.canvas = tk.Canvas(main_row, bg="#222", highlightthickness=0)
         self.canvas.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
         self.canvas.bind("<Button-1>", self.on_canvas_click)
+        self.canvas.bind("<Button-3>", self._on_canvas_right_click_undo)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
 
         preview_col = ttk.Frame(main_row, width=220)
@@ -626,7 +605,7 @@ class ManualComposeApp(tk.Tk):
         ttk.Label(
             frm,
             text="Shortcuts: Right = next background · Left = previous background · Down = next object · "
-            "Up = previous object · Ctrl+Left = undo last save (not in text fields)",
+            "Up = previous object · Right-click image = undo last save",
             font=("TkDefaultFont", 8),
         ).pack(anchor=tk.W)
 
@@ -792,6 +771,11 @@ class ManualComposeApp(tk.Tk):
         cx = max(hw, min(iw - hw, cx))
         cy = max(hh, min(ih - hh, cy))
         return cx, cy
+
+    def _on_canvas_right_click_undo(self, _event: tk.Event) -> str:
+        """Erase last output (same as Undo button) — right mouse button on image area."""
+        self.undo_last_placement()
+        return "break"
 
     def on_canvas_click(self, event: tk.Event) -> None:
         target_h = int(self.object_height.get())

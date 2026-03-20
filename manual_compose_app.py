@@ -837,22 +837,25 @@ class ManualComposeApp(tk.Tk):
         obj_path = self.obj_paths[self.obj_index % len(self.obj_paths)]
         try:
             obj = Image.open(obj_path)
-            obj_r = resize_object_with_height(obj, target_h)
         except OSError as e:
             messagebox.showerror("Error", f"Could not load object:\n{e}")
             return
 
+        # Object height is always the final axis-aligned size after any rotation.
         rotation_note = ""
         if self.random_rotate_object.get():
             angle_deg = random.uniform(0.0, 360.0)
-            obj_r = obj_r.convert("RGBA")
-            obj_r = obj_r.rotate(
+            obj_r = obj.convert("RGBA").rotate(
                 angle_deg,
                 resample=Image.Resampling.BICUBIC,
                 expand=True,
                 fillcolor=(0, 0, 0, 0),
             )
             rotation_note = f", rot {angle_deg:.1f}°"
+        else:
+            obj_r = obj
+
+        obj_r = resize_object_with_height(obj_r, target_h)
 
         iw, ih = self.bg_work.size
         ow, oh = obj_r.size

@@ -73,7 +73,40 @@ State for output list / auto folder / random rotate is saved in `.manual_compose
 
 ---
 
-## 4. Fix `imagePath` in JSON — `fix_labelme_imagepath.py`
+## 4. Resize a folder of images — `resize_images.py`
+
+**GUI** (no arguments): pick input folder, set width/height, optional custom output folder, recursive / stretch / JPEG quality.
+
+```bash
+python resize_images.py
+```
+
+**CLI:**
+
+```bash
+python resize_images.py -i ./photos -W 1280 -H 720
+python resize_images.py -i ./photos -W 1280 -H 720 -o ./out --recursive
+python resize_images.py -i ./photos -W 800 -H 600 --stretch
+```
+
+Default output folder is `input/resized_WxH/` if `-o` is omitted. **Fit** mode (default) center-crops then scales to the exact resolution (same idea as `compose_images`). **Stretch** ignores aspect ratio.
+
+---
+
+## 5. Replace shape labels — `replace_labelme_labels.py`
+
+Recursively finds Labelme-style `.json` files and replaces **`shapes[].label`** when it **exactly equals** `--old-label` with `--new-label`. Appends a **resume** report (JSON) with timestamps, file list, and counts.
+
+```bash
+python replace_labelme_labels.py --input ./outputs --old-label bird --new-label duck
+python replace_labelme_labels.py -i ./outputs --old bird --new duck --dry-run
+```
+
+By default the resume file is **`{input}/label_replace_resume.json`** (each run appends to `runs[]` and updates `last_run`). Use `--resume PATH` to set another path, or **`--no-resume`** to skip writing it.
+
+---
+
+## 6. Fix `imagePath` in JSON — `fix_labelme_imagepath.py`
 
 Recursively finds `.json` files, pairs them with an image of the **same stem** in the same folder, and sets `imagePath` to that image’s real filename if it was wrong.
 
@@ -84,7 +117,7 @@ python fix_labelme_imagepath.py --root outputs --dry-run
 
 ---
 
-## 5. Rename JSON + image pairs — `rename_labelme_pairs.py`
+## 7. Rename JSON + image pairs — `rename_labelme_pairs.py`
 
 Recursively finds pairs `stem.json` + `stem` + image extension. If `stem` **starts with** `--old-prefix`, renames both to `new_prefix + stem[len(old_prefix):]` and updates `imagePath` in the JSON.
 
